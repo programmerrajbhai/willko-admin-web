@@ -1,35 +1,61 @@
-<?php include 'includes/header.php'; include 'includes/sidebar.php'; 
+<?php 
+include 'includes/header.php'; 
+include 'includes/sidebar.php'; 
+
+// সেশন স্টার্ট না থাকলে স্টার্ট করা এবং CSRF টোকেন জেনারেট করা
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
 
 $msg = "";
 $err = "";
 
 if(isset($_POST['add_provider'])) {
-    $name = $_POST['name'];
-    $email = $_POST['email'];
-    $phone = $_POST['phone'];
+    
+    // 🔥 FIX 1: CSRF Token Verification
+    if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
+        die("Security violation: Invalid CSRF Token.");
+    }
+
+    $name = trim($_POST['name']);
+    $email = trim($_POST['email']);
+    $phone = trim($_POST['phone']);
     $pass = password_hash($_POST['password'], PASSWORD_DEFAULT);
-    $address = $_POST['address'];
+    $address = trim($_POST['address']);
     
     // NID & Bank Info
-    $nid = $_POST['nid'];
-    $bank = $_POST['bank_name'];
-    $acc_num = $_POST['account_number'];
+    $nid = trim($_POST['nid']);
+    $bank = trim($_POST['bank_name']);
+    $acc_num = trim($_POST['account_number']);
 
-    // Check if email/phone exists
-    $check = $conn->query("SELECT * FROM users WHERE email='$email' OR phone='$phone'");
-    if($check->num_rows > 0) {
+    // 🔥 FIX 2: SQL Injection Prevention using Prepared Statement
+    $check_stmt = $conn->prepare("SELECT id FROM users WHERE email=? OR phone=?");
+    $check_stmt->bind_param("ss", $email, $phone);
+    $check_stmt->execute();
+    $check_stmt->store_result();
+
+    if($check_stmt->num_rows > 0) {
         $err = "Email or Phone already exists!";
     } else {
-        // Insert Query
-        $stmt = $conn->prepare("INSERT INTO users (name, email, phone, password, address, role, status, nid_number, bank_name, account_number) VALUES (?, ?, ?, ?, ?, 'provider', 'active', ?, ?, ?)");
-        $stmt->bind_param("sssssssss", $name, $email, $phone, $pass, $address, $nid, $bank, $acc_num);
+        // 🔥 FIX 3: Crash Issue Fixed (8 placeholders '?' and 8 's' in bind_param)
+        $insert_stmt = $conn->prepare("INSERT INTO users (name, email, phone, password, address, role, status, nid_number, bank_name, account_number) VALUES (?, ?, ?, ?, ?, 'provider', 'active', ?, ?, ?)");
         
-        if($stmt->execute()) {
+        // ssssssss (8 ti s, karon variable 8 ti)
+        $insert_stmt->bind_param("ssssssss", $name, $email, $phone, $pass, $address, $nid, $bank, $acc_num);
+        
+        if($insert_stmt->execute()) {
             echo "<script>location.href='providers.php';</script>";
         } else {
-            $err = "Database Error: " . $conn->error;
+            // 🔥 FIX 4: Error handling secure kora holo jate hacker details na bojhe
+            $err = "Failed to create account. Please try again later."; 
+            error_log("Database Error: " . $insert_stmt->error); // Log the actual error for the developer
         }
+        $insert_stmt->close();
     }
+    $check_stmt->close();
 }
 ?>
 
@@ -80,12 +106,14 @@ if(isset($_POST['add_provider'])) {
 
     <?php if($err): ?>
         <div class="alert alert-danger bg-danger text-white border-0 shadow-sm mb-4">
-            <i class="fas fa-exclamation-circle me-2"></i> <?= $err ?>
+            <i class="fas fa-exclamation-circle me-2"></i> <?= htmlspecialchars($err) ?>
         </div>
     <?php endif; ?>
 
     <form method="POST" class="row g-4">
         
+        <input type="hidden" name="csrf_token" value="<?= $_SESSION['csrf_token'] ?>">
+
         <div class="col-lg-8">
             <div class="glass-card p-4 h-100">
                 <h6 class="section-title text-info"><i class="fas fa-user-circle me-2"></i>Personal Information</h6>

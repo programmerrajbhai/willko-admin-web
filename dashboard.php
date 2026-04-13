@@ -2,23 +2,62 @@
 include 'includes/header.php'; 
 include 'includes/sidebar.php'; 
 
-// --- Data Fetching Logic (UNCHANGED) ---
+// =======================================================
+// 🔥 1. STATS FETCHING LOGIC (Optimized)
+// =======================================================
+
+// Total Orders, Active Providers, Total Customers, Total Revenue
 $total_orders = $conn->query("SELECT COUNT(*) FROM bookings")->fetch_row()[0];
 $active_providers = $conn->query("SELECT COUNT(*) FROM users WHERE role='provider' AND status='active'")->fetch_row()[0];
 $total_customers = $conn->query("SELECT COUNT(*) FROM users WHERE role='user'")->fetch_row()[0];
 $total_revenue = $conn->query("SELECT SUM(final_total) FROM bookings WHERE status='completed'")->fetch_row()[0] ?? 0;
 
-$dates = []; $sales = [];
-for ($i = 6; $i >= 0; $i--) {
-    $date = date('Y-m-d', strtotime("-$i days"));
-    $res = $conn->query("SELECT SUM(final_total) as total FROM bookings WHERE DATE(created_at) = '$date' AND status='completed'")->fetch_assoc();
-    $dates[] = date('d M', strtotime($date));
-    $sales[] = $res['total'] ?? 0;
+// =======================================================
+// 🔥 2. PERFORMANCE FIX: N+1 Query Problem Solved!
+// =======================================================
+// আগে লুপের ভেতর ৭ বার ডাটাবেসে কল করা হতো। এখন মাত্র ১টি কোয়েরিতে ৭ দিনের ডাটা আনা হচ্ছে।
+$sql_sales = "SELECT DATE(created_at) as sale_date, SUM(final_total) as daily_total 
+              FROM bookings 
+              WHERE status='completed' 
+              AND created_at >= DATE_SUB(CURDATE(), INTERVAL 6 DAY) 
+              GROUP BY DATE(created_at) 
+              ORDER BY DATE(created_at) ASC";
+
+$sales_result = $conn->query($sql_sales);
+$sales_map = [];
+
+// ডাটাবেস থেকে পাওয়া রেজাল্ট ম্যাপে সেভ করা
+while($row = $sales_result->fetch_assoc()) {
+    $sales_map[$row['sale_date']] = (float)$row['daily_total'];
 }
 
-$pending = $conn->query("SELECT COUNT(*) FROM bookings WHERE status='pending'")->fetch_row()[0];
-$completed = $conn->query("SELECT COUNT(*) FROM bookings WHERE status='completed'")->fetch_row()[0];
-$cancelled = $conn->query("SELECT COUNT(*) FROM bookings WHERE status='cancelled'")->fetch_row()[0];
+// চার্টের জন্য X-Axis (Dates) এবং Y-Axis (Sales) সাজানো
+$dates = []; 
+$sales = [];
+
+for ($i = 6; $i >= 0; $i--) {
+    $d = date('Y-m-d', strtotime("-$i days"));
+    $dates[] = date('d M', strtotime($d)); // "14 Apr" format
+    
+    // যদি ওই তারিখে সেল থাকে তাহলে সেটা বসবে, না থাকলে 0 বসবে
+    $sales[] = $sales_map[$d] ?? 0;
+}
+
+// =======================================================
+// 🔥 3. ORDER STATUS FETCHING (Optimized)
+// =======================================================
+// আগে ৩টি আলাদা কোয়েরি চলতো, এখন মাত্র ১টিতে করা হলো।
+$status_res = $conn->query("SELECT status, COUNT(*) as count FROM bookings GROUP BY status");
+$order_stats = ['pending' => 0, 'completed' => 0, 'cancelled' => 0];
+
+while($row = $status_res->fetch_assoc()) {
+    $order_stats[$row['status']] = $row['count'];
+}
+
+$pending = $order_stats['pending'];
+$completed = $order_stats['completed'];
+$cancelled = $order_stats['cancelled'];
+
 ?>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
